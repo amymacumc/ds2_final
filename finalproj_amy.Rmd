@@ -1,0 +1,884 @@
+---
+title: "Final Project Code"
+author: "Tianshu Liu, Lincole Jiang, Jiong Ma"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+    number_sections: true
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '3'
+header-includes:
+- \usepackage{fancyhdr}
+- \usepackage{lipsum}
+- \pagestyle{fancy}
+- \fancyhead[R]{\thepage}
+- \fancypagestyle{plain}{\pagestyle{fancy}}
+editor_options: 
+  chunk_output_type: console
+---
+\newpage
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      message = FALSE, 
+                      warning = FALSE)
+```
+
+
+```{r library}
+library(tidyverse)
+library(summarytools)
+library(corrplot)
+library(caret)
+library(vip)
+library(ranger)
+library(randomForest)
+library(rpart) # bagging, regression trees
+library(rpart.plot)
+library(gbm)
+library(pdp)
+library(glmnet)
+library(pROC)
+library(mlbench)
+library(AppliedPredictiveModeling)
+```
+
+# Data Import
+```{r import_data}
+# import data
+load("./recovery.RData")
+
+set.seed(3196) 
+lts.dat <- dat[sample(1:10000, 2000),]
+set.seed(2575)
+lincole.dat <- dat[sample(1:10000, 2000),]
+set.seed(5509)
+amy.dat <- dat[sample(1:10000, 2000),]
+
+dat1 <- lts.dat %>% 
+  merge(lincole.dat, all = TRUE) %>% 
+  na.omit() %>% 
+  select(-id) %>% 
+  mutate(
+    gender = as.factor(gender),
+    race = as.factor(race),
+    smoking = as.factor(smoking),
+    hypertension = as.factor(hypertension),
+    diabetes = as.factor(diabetes),
+    vaccine = as.factor(vaccine),
+    severity = as.factor(severity),
+    study = as.factor(study))
+  
+dat2 <- lts.dat %>% 
+  merge(amy.dat, all = TRUE) %>% 
+  na.omit() %>% 
+  select(-id) %>% 
+  mutate(
+    gender = as.factor(gender),
+    race = as.factor(race),
+    smoking = as.factor(smoking),
+    hypertension = as.factor(hypertension),
+    diabetes = as.factor(diabetes),
+    vaccine = as.factor(vaccine),
+    severity = as.factor(severity),
+    study = as.factor(study))
+
+dat3 <- lincole.dat %>% 
+  merge(amy.dat, all = TRUE) %>% 
+  na.omit() %>% 
+  select(-id) %>% 
+  mutate(
+    gender = as.factor(gender),
+    race = as.factor(race),
+    smoking = as.factor(smoking),
+    hypertension = as.factor(hypertension),
+    diabetes = as.factor(diabetes),
+    vaccine = as.factor(vaccine),
+    severity = as.factor(severity),
+    study = as.factor(study))
+
+dat <- dat1
+summary(dat)
+
+bin.dat1 <- dat1 %>% 
+  mutate(recovery_time = ifelse(recovery_time > 30, ">30", "<=30")) %>% 
+  mutate(recovery_time = factor(recovery_time, levels = c("<=30", ">30")))
+  
+bin.dat2 <- dat2 %>% 
+  mutate(recovery_time = ifelse(recovery_time > 30, ">30", "<=30")) %>% 
+  mutate(recovery_time = factor(recovery_time, levels = c("<=30", ">30")))
+
+bin.dat3 <- dat3 %>% 
+  mutate(recovery_time = ifelse(recovery_time > 30, ">30", "<=30")) %>% 
+  mutate(recovery_time = factor(recovery_time, levels = c("<=30", ">30")))
+
+bin.dat <- bin.dat1
+summary(bin.dat)
+```
+
+# Data partition
+
+```{r data_partition}
+# data partition
+dat.matrix <- model.matrix(recovery_time ~ ., dat)[ ,-1]
+
+set.seed(2023)
+trainRows <- createDataPartition(y = dat$recovery_time, p = 0.8, list = FALSE)
+
+train.dat <- dat[trainRows,]
+train.bin.dat <- bin.dat[trainRows,]
+
+train.x <- dat.matrix[trainRows,]
+train.y <- dat$recovery_time[trainRows]
+train.bin.y <- bin.dat$recovery_time[trainRows]
+
+test.x <- dat.matrix[-trainRows,]
+test.y <- dat$recovery_time[-trainRows]
+test.bin.y <- bin.dat$recovery_time[-trainRows]
+```
+
+# Primary Analysis
+## Exploratory analysis and data visualization
+
+```{r primary_summary, results = 'asis'}
+# data summary
+st_options(plain.ascii = FALSE,
+           style = "rmarkdown",
+           dfSummary.silent = TRUE,
+           footnote = NA,
+           subtitle.emphasis = FALSE)
+dfSummary(train.dat)
+
+skimr::skim_without_charts(train.dat)
+```
+
+
+```{r pri_eda, fig.show='true'}
+####################################################################
+## Remember to edit the next chunk if you do any modification here:)
+####################################################################
+
+# EDA
+# library(GGally)
+# ggpairs(dat)
+
+cts_var = c("age", "height", "weight", "bmi", "SBP", "LDL")
+fct_var = c("gender", "race", "smoking", "hypertension", "diabetes", "vaccine", "severity", "study")
+
+# scatter plot of continuous predictors
+par(mfrow=c(2, 3))
+for (i in 1:length(cts_var)){
+  var = cts_var[i]
+  plot(recovery_time~train.dat[,var],
+       data = train.dat,
+       ylab = "recovery time",
+       xlab = var,
+       main = str_c("Scatter Plot of ", var))
+  lines(stats::lowess(train.dat[,var], train.dat$recovery_time), col = "red", type = "l")
+}
+for (i in 1:length(cts_var)){
+  var = cts_var[i]
+  hist(train.dat[,var], 
+       ylab = "recovery_time", 
+       xlab = var, 
+       main = str_c("Histogram of ", var)) 
+}
+
+# boxplot of categorical predictors
+par(mfrow=c(2, 4))
+for (i in 1:length(fct_var)){
+  var = fct_var[i]
+  plot(recovery_time~train.dat[,var],
+       data = train.dat,
+       ylab = "recovery_time", 
+       xlab = var, 
+       main = str_c("Boxplot of ", var))
+}
+
+# histogram of response
+par(mfrow=c(1, 1))
+hist(train.dat$recovery_time, 
+     breaks = 50, 
+     main = "Histogram of recovery_time", 
+     xlab = "recovery_time")
+
+# correlation
+par(mfrow=c(1, 1))
+corrplot(cor(train.dat[,cts_var]), method = "circle", type = "full", 
+         title = "Correlation plot of continuous variables", 
+         mar = c(2, 2, 4, 2))
+```
+
+```{r pri_eda_save_plot, include=FALSE}
+# this chunk is used just for saving codes
+# create folder for figures
+folder_path <- "./figure/"
+if (!file.exists(folder_path)) {
+  dir.create(folder_path, recursive = TRUE)
+} else{print("...")}
+
+# EDA
+# scatter plot of continuous predictors
+jpeg("./figure/eda1_sactter.jpeg", width=8, height=6, units="in", res=500)
+par(mfrow=c(2, 3))
+for (i in 1:length(cts_var)){
+  var = cts_var[i]
+  plot(recovery_time~train.dat[,var],
+       data = train.dat,
+       ylab = "recovery_time",
+       xlab = var,
+       main = str_c("Scatter plot of ", var))
+  lines(stats::lowess(train.dat[,var], train.dat$recovery_time), col = "red", type = "l")
+}
+dev.off()
+
+# histograms of predictors
+jpeg("./figure/eda1_hist.jpeg", width=8, height=6, units="in", res=500)
+par(mfrow=c(2, 3))
+for (i in 1:length(cts_var)){
+  var = cts_var[i]
+  hist(train.dat[,var], 
+       ylab = "recovery_time", 
+       xlab = var, 
+       main = str_c("Histogram of ", var)) 
+}
+dev.off()
+
+
+# boxplot of categorical predictors
+jpeg("./figure/eda1_boxplot.jpeg", width = 10, height=6, units="in", res=500)
+par(mfrow=c(2, 4))
+for (i in 1:length(fct_var)){
+  var = fct_var[i]
+  plot(recovery_time~train.dat[,var],
+       data = train.dat,
+       ylab = "recovery_time", 
+       xlab = var, 
+       main = str_c("Boxplot of ", var))
+}
+dev.off()
+
+# histogram of response
+jpeg("./figure/eda1_res_hist.jpeg", width = 8, height=6, units="in", res=500)
+par(mfrow=c(1, 1))
+hist(train.dat$recovery_time, 
+     breaks = 50, 
+     main = "Histogram of recovery_time", 
+     xlab = "recovery_time")
+dev.off()
+
+# correlation
+jpeg("./figure/eda1_corr.jpeg", width = 5, height=5, units="in", res=500)
+par(mfrow=c(1, 1))
+corrplot(cor(train.dat[,cts_var]), method = "circle", type = "full", 
+         title = "Correlation plot of continuous variables", 
+         mar = c(2, 2, 4, 2))
+dev.off()
+```
+
+## Model Training
+### Linear Model
+
+```{r linear}
+ctrl1 <- trainControl(method = "cv", number = 10)
+set.seed(2023)
+
+lm.fit <- train(train.x, train.y,
+               method = "lm",
+               trControl = ctrl1)
+
+coef(lm.fit$finalModel)
+
+vip(lm.fit$finalModel) + theme_bw()
+```
+
+### LASSO
+
+```{r lasso}
+set.seed(2023)
+lasso.fit <- train(train.x, train.y,
+                   method = "glmnet",
+                   tuneGrid = expand.grid(
+                     alpha = 1,
+                     lambda = exp(seq(0, -7, length=100))),
+                   trControl = ctrl1)
+
+lasso.fit$bestTune
+
+coef(lasso.fit$finalModel, s = lasso.fit$bestTune$lambda)
+
+ggplot(lasso.fit, highlight = TRUE) + 
+  labs(title="LASSO CV Result") +
+  scale_x_continuous(trans='log',n.breaks = 10) +
+  theme_bw()
+ggsave("./figure/lasso_cv.jpeg", dpi = 500)
+
+vip(lasso.fit$finalModel)
+```
+
+
+### Ridge
+
+```{r ridge}
+set.seed(2023)
+ridge.fit <- train(train.x, train.y,
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 0,
+                                          lambda = exp(seq(1, -5, length=100))), 
+                   trControl = ctrl1)
+
+ridge.fit$bestTune
+
+coef(ridge.fit$finalModel, s = ridge.fit$bestTune$lambda)
+
+ggplot(ridge.fit,highlight = TRUE) + 
+  scale_x_continuous(trans='log', n.breaks = 6) +
+  labs(title="Ridge CV Result") +
+  theme_bw()
+ggsave("./figure/ridge_cv.jpeg", dpi = 500)
+
+vip(ridge.fit$finalModel) + theme_bw()
+```
+
+
+### Elastic Net
+
+```{r enet}
+set.seed(2023)
+enet.fit <- train(train.x, train.y,
+                  method = "glmnet",
+                  tuneGrid = expand.grid(
+                    alpha = seq(0, 1, length = 21),
+                    lambda = exp(seq(0, -8, length = 100))),
+                  trControl = ctrl1)
+
+enet.fit$bestTune
+
+coef(enet.fit$finalModel, enet.fit$bestTune$lambda)
+
+
+ggplot(enet.fit, highlight = TRUE) + 
+  scale_x_continuous(trans='log', n.breaks = 6) +
+  labs(title ="Elastic Net CV Result") + 
+  theme_bw()
+
+ggsave("./figure/enet_cv.jpeg", dpi = 500)
+
+vip(enet.fit$finalModel)+ theme_bw()
+```
+
+### Principal components regression (PCR)
+
+```{r pcr}
+set.seed(2023)
+pcr.fit <- train(train.x, 
+                 train.y,
+                 method = "pcr",
+                 tuneGrid  = data.frame(ncomp = 1:ncol(train.x)),
+                 trControl = ctrl1,
+                 preProcess = c("center", "scale"))
+ggplot(pcr.fit, highlight = TRUE) + 
+  labs(title  ="PCR CV Result") +
+  theme_bw()
+
+ggsave("./figure/pcr_cv.jpeg", dpi = 500)
+
+pcr.fit$bestTune
+coef(pcr.fit$finalModel)
+
+vip(pcr.fit$finalModel) + theme_bw()
+```
+
+### Partial Least Squares (PLS)
+
+```{r pls}
+set.seed(2023)
+pls.fit <- train(train.x, 
+                 train.y,
+                 method = "pls",
+                 tuneGrid = data.frame(ncomp = 1:ncol(train.x)),
+                 trControl = ctrl1,
+                 preProcess = c("center", "scale"))
+ggplot(pls.fit, highlight = TRUE) + 
+  labs(title  ="PLS CV Result") +
+  theme_bw()
+
+ggsave("./figure/pls_cv.jpeg", dpi = 500)
+
+pls.fit$bestTune
+coef(pls.fit$finalModel)
+
+vip(pls.fit$finalModel) + theme_bw()
+```
+
+### Generalized Additive Model (GAM)
+
+```{r gam}
+set.seed(2023)
+gam.fit <- train(train.x, 
+                 train.y,
+                 method = "gam",
+                 tuneGrid = data.frame(select = c(TRUE, FALSE), 
+                                       method = "GCV.Cp"),
+                 trControl = ctrl1)
+
+
+ggplot(gam.fit) +
+  labs(title = "GAM CV Result") + 
+  theme_bw()
+ggsave("./figure/gam_cv.jpeg", dpi = 500)
+
+gam.fit$bestTune
+
+# coef(gam.fit$finalModel)
+gam.fit$finalModel
+
+par(mfrow=c(2, 3))
+plot(gam.fit$finalModel)
+par(mfrow=c(1, 1))
+```
+
+### Multivariate Adaptive Regression Splines (MARS)
+
+```{r mars}
+mars_grid <- expand.grid(degree = 1:3,
+                         nprune = 2:15)
+set.seed(2023)
+mars.fit <- train(train.x, 
+                  train.y,
+                  method = "earth",
+                  tuneGrid = mars_grid,
+                  trControl = ctrl1)
+
+ggplot(mars.fit, highlight = TRUE)+ 
+  labs(title  ="MARS CV Result") +
+  theme_bw()
+
+ggsave("./figure/mars_cv.jpeg", dpi = 500)
+
+mars.fit$bestTune
+
+coef(mars.fit$finalModel) %>% broom::tidy() %>% knitr::kable()
+
+summary(mars.fit$finalModel)
+
+#vip plots
+vip(mars.fit$finalModel)
+
+p1 <- pdp::partial(mars.fit, pred.var = c("bmi"), grid.resolution = 10) %>% autoplot() + theme_bw()
+p2 <- pdp::partial(mars.fit, pred.var = c("studyB"), grid.resolution = 10) %>% autoplot() + theme_bw()
+
+# interactions of bmi and the studyB
+p3 <- pdp::partial(mars.fit, pred.var = c("bmi", "studyB"),
+                   grid.resolution = 10) %>%
+      pdp::plotPartial(levelplot = FALSE, zlab = "yhat", drape = TRUE,
+                       screen = list(z = 20, x = -60))
+(p4 <- grid.arrange(p1, p2, p3, ncol = 3))
+
+```
+
+### K-Nearest Neighbour (KNN)
+
+```{r knn}
+set.seed(2023)
+knn.fit <- train(train.x, 
+                train.y,
+                tuneGrid  = data.frame(k = 1:20),
+                method = "knn",
+                trControl = ctrl1)
+
+ggplot(knn.fit, highlight = TRUE) + 
+  labs(title  ="KNN CV Result") +
+  theme_bw()
+
+ggsave("./figure/knn_cv.jpeg", dpi = 500)
+
+knn.fit$bestTune
+```
+
+### Bagging
+
+```{r}
+set.seed(2023)
+bag.fit <- train(train.x, 
+                train.y,
+                method = "treebag",
+                trControl = ctrl1,
+                nbagg = 200,  
+                control = rpart.control(minsplit = 2, cp = 0)
+)
+
+bag.fit$bestTune
+
+vip(bag.fit, num_features = 40, bar = FALSE)
+
+p1 <- pdp::partial(
+  bag.fit, 
+  pred.var = "Lot_Area",
+  grid.resolution = 20
+  ) %>% 
+  autoplot()
+
+p2 <- pdp::partial(
+  bag.fit, 
+  pred.var = "Lot_Frontage", 
+  grid.resolution = 20
+  ) %>% 
+  autoplot()
+
+gridExtra::grid.arrange(p1, p2, nrow = 1)
+
+```
+
+
+### Random Forest
+
+```{r}
+set.seed(2023)
+rf.grid <- expand.grid(mtry = 1:18,
+                       splitrule = "variance",
+                       min.node.size = 1:6)
+
+rf.fit <- train(train.x, train.y,
+                method = "ranger",
+                tuneGrid = rf.grid,
+                trControl = ctrl1)
+
+rf.fit$bestTune
+
+rf2.final.per <- ranger(outstate ~ . ,college[indexTrain,],
+                        mtry = rf.fit$bestTune[[1]],
+                        splitrule = "variance",
+                        min.node.size = rf.fit$bestTune[[3]],
+                        importance = "permutation",
+                        scale.permutation.importance = TRUE)
+barplot(sort(ranger::importance(rf2.final.per), decreasing = FALSE),
+        las = 2, horiz = TRUE, cex.names = 0.7,
+        col = colorRampPalette(colors = c("cyan","blue"))(15))
+```
+
+### Boosting
+```{r}
+set.seed(2023)
+bst.grid <- expand.grid(n.trees = c(2000,3000,4000,5000),
+                        interaction.depth = 1:5,
+                        shrinkage = c(0.001,0.003,0.005),
+                        n.minobsinnode = c(1,10))
+
+bst.fit <- train(outstate ~ . ,
+                 college[indexTrain,],
+                 method = "gbm",
+                 tuneGrid = gbm.grid,
+                 trControl = ctrl,
+                 verbose = FALSE)
+
+bst.fit$bestTune
+ggplot(gbm.fit, highlight = TRUE)
+
+# Variable Importance
+summary(bst.fit$finalModel, las = 2, cBars = 16, cex.names = 0.6)
+
+```
+
+### Regression Trees
+
+```{r}
+rpart.fit <- train(train.x, train.y,
+                 method = 'rpart',
+                 tuneGrid = data.frame(cp = exp(seq(-6, -2, length = 50))),
+                 trControl = ctrl1)
+rpart.fit$bestTune
+
+ggplot(rpart.fit, highlight = T)
+rpart.plot(rpart.fit$finalModel)
+
+
+```
+
+## Model Selection
+
+```{r resample}
+set.seed(2023)
+resamp <- resamples(list(lm = lm.fit,
+                         lasso = lasso.fit,
+                         ridge = ridge.fit,
+                         enet = enet.fit,
+                         pcr = pcr.fit,
+                         pls = pls.fit,
+                         gam = gam.fit,
+                         mars = mars.fit,
+                         knn = knn.fit))
+
+summary(resamp)
+
+# jpeg("./figure/resample.jpeg", width = 8, height=6, units="in", res=500)
+p1=bwplot(resamp, metric = "RMSE")
+p2=bwplot(resamp, metric = "Rsquared")
+grid.arrange(p1, p2 ,ncol=2)
+# dev.off()
+```
+
+```{r interpret}
+p1<- pdp::partial(mars.fit, pred.var = c("bmi"), grid.resolution = 10) %>% autoplot() + 
+  theme_bw()+ 
+  labs(title = "Partial Dependence Plots of MARS Model")
+
+p2 <-pdp::partial(mars.fit, pred.var = c("bmi", "studyB"),
+                   grid.resolution = 10) %>%
+      pdp::plotPartial(levelplot = FALSE, zlab = "yhat", drape = TRUE,
+                       screen = list(z = 20, x = -60))
+
+# jpeg("./figure/partial_dependence.jpeg", width = 8, height=6, units="in", res=500)
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+# dev.off()
+
+# Important variables
+varImp(mars.fit$finalModel)
+```
+
+## Training / Testing Error
+
+```{r err}
+# training error
+mars.train.pred = predict(mars.fit, newdata = train.x)
+RMSE(train.y, mars.train.pred)
+
+# testing error
+mars.pred = predict(mars.fit, newdata = test.x)
+RMSE(test.y, mars.pred)
+```
+
+# Secondary Analysis
+
+## Exploratory analysis and data visualization
+
+```{r sec_summary, results = 'asis'}
+# data summary
+st_options(plain.ascii = FALSE,
+           style = "rmarkdown",
+           dfSummary.silent = TRUE,
+           footnote = NA,
+           subtitle.emphasis = FALSE)
+dfSummary(train.bin.dat)
+
+skimr::skim_without_charts(train.bin.dat)
+```
+
+
+```{r sec_eda, fig.show='true'}
+####################################################################
+## Remember to edit the next chunk if you do any modification here:)
+####################################################################
+# EDA
+
+
+# boxplot of continuous predictors
+par(mfrow=c(2, 3))
+for (i in 1:length(cts_var)){
+  var = cts_var[i]
+  boxplot(train.bin.dat[,var]~recovery_time,
+       data = train.bin.dat,
+       xlab = "recovery time",
+       ylab = var, 
+       main = str_c("Boxplot of ", var))
+}
+
+# barplot of categorical predictors
+par(mfrow=c(2, 4))
+for (i in 1:length(fct_var)){
+  var <- fct_var[i]
+  counts <- table(train.bin.dat[,var], train.bin.y)
+  barplot(counts, beside = TRUE, legend.text = TRUE,
+        xlab = "recovery time", 
+        ylab = "Count", 
+        main = str_c("Barplot of ", var), 
+        args.legend = list(bty = 'n', x = 'topleft'))
+}
+
+# barplot of response
+par(mfrow=c(1, 1))
+counts <- table(train.bin.y)
+barplot(counts, 
+        xlab = "recovery time", 
+        ylab = "Count", 
+        main = "Barplot of binary recovery_time")
+```
+
+```{r sec_eda_save_plot, include=FALSE}
+# this chunk is used just for saving codes
+# EDA
+
+# boxplot of continuous predictors
+jpeg("./figure/eda2_boxplot.jpeg", width=8, height=6, units="in", res=500)
+par(mfrow=c(2, 3))
+for (i in 1:length(cts_var)){
+  var = cts_var[i]
+  boxplot(train.bin.dat[,var]~recovery_time,
+       data = train.bin.dat,
+       xlab = "recovery time",
+       ylab = var,
+       main = str_c("Boxplot of ", var))
+}
+dev.off()
+
+# barplot of categorical predictors
+jpeg("./figure/eda2_barplot.jpeg", width=8, height=6, units="in", res=500)
+par(mfrow=c(2, 4))
+for (i in 1:length(fct_var)){
+  var <- fct_var[i]
+  counts <- table(train.bin.dat[,var], train.bin.y)
+  barplot(counts, beside = TRUE, legend.text = TRUE,
+        xlab = "recovery time", 
+        ylab = "Count", 
+        main = str_c("Barplot of ", var), 
+        args.legend = list(bty = 'n', x = 'topleft'))
+}
+dev.off()
+
+# barplot of response
+jpeg("./figure/eda2_res_barplot.jpeg", width = 8, height=6, units="in", res=500)
+par(mfrow=c(1, 1))
+counts <- table(train.bin.y)
+barplot(counts, 
+        xlab = "recovery time", 
+        ylab = "Count", 
+        main = "Barplot of binary recovery_time")
+dev.off()
+```
+
+
+## Model Training
+
+```{r}
+ctrl2 <- trainControl(method = "cv",
+                     summaryFunction = twoClassSummary,
+                     classProbs = TRUE)
+
+```
+
+### Logistic Regression
+```{r logistic}
+set.seed(2023)
+glm.fit <- train(
+  train.x, train.bin.y,
+  method = 'glm',
+  metric = 'ROC',
+  trControl = 'ctrl2'
+)
+
+coef(glm.fit$finalModel)
+vip(glm.fit$finalModel)
+
+```
+
+### Penalized Logistic Regression
+```{r}
+glmnGrid <- expand.grid(.alpha = seq(0, 1, length = 21),
+                        .lambda = exp(seq(-8, -1, length = 50)))
+set.seed(1)
+glmn.fit <- train(train.x, train.bin.y,
+                  method = 'glmnet',
+                  tuneGrid = glmnGrid,
+                  metric = 'ROC',
+                  trControl = ctrl2)
+
+glmn.fit$bestTune
+
+myCol<- rainbow(25)
+myPar <- list(superpose.symbol = list(col = myCol),
+superpose.line = list(col = myCol))
+plot(glmn.fit, par.settings = myPar, xTrans = function(x) log(x))
+
+coef(glmn.fit$finalModel)
+vip(glmn.fit$finalModel)
+```
+
+### Generalized Additive Model (GAM) for classification
+
+```{r}
+set.seed(2023)
+gam.bin.fit <- train(train.x, train.bin.y,
+                   method = "gam",
+                   metric = "ROC",
+                   trControl = ctrl2)
+gam.bin.fit$finalModel
+
+plot(gam.bin.fit$finalModel, select = 3)
+
+ggplot(gam.bin.fit) +
+  labs(title = "GAM CV Result") + 
+  theme_bw()
+ggsave("./figure/gam_cv.jpeg", dpi = 500)
+
+gam.bin.fit$bestTune
+
+# coef(gam.fit$finalModel)
+gam.bin.fit$finalModel
+
+par(mfrow=c(2, 3))
+plot(gam.bin.fit$finalModel)
+par(mfrow=c(1, 1))
+
+```
+
+### Multivariate Adaptive Regression Splines (MARS) for classification
+
+```{r}
+set.seed(1)
+mars.bin.fit <- train(train.x, train.bin.y,
+                    method = "earth",
+                    tuneGrid = expand.grid(degree = 1:3,
+                                           nprune = 2:15),
+                    metric = "ROC",
+                    trControl = ctrl2)
+
+ggplot(mars.bin.fit, highlight = TRUE)+ 
+  labs(title  ="MARS(Binned Response) CV Result") +
+  theme_bw()
+
+ggsave("./figure/mars_binned_cv.jpeg", dpi = 500)
+
+mars.bin.fit$bestTune
+
+coef(mars.bin.fit$finalModel)
+
+summary(mars.bin.fit$finalModel)
+
+vip(mars.bin.fit$finalModel)
+```
+
+
+
+### Linear Discriminant Analysis (LDA)
+
+
+### Quadratic Discriminant Analysis (QDA)
+
+
+### Naive Bayes (NB)
+
+### Bagging
+
+### Random Forest
+
+### Boosting
+
+
+### Classification Trees
+
+
+
+### Support Vector Machine (SVM)
+
+### Hierarchical Clustering
+
+### Principal Component Analysis (PCA)
+
+## Model Selection
+
+## Training  / Testing Error
