@@ -909,7 +909,7 @@ qda.fit <- train(train.x,
 ```{r}
 nbGrid <- expand.grid(usekernel = c(FALSE,TRUE),
                       fL = 1,
-                      adjust = seq(.2, 3, by = .2))
+                      adjust = seq(0, 3, by = .1))
 set.seed(2023)
 nb.fit <- train(train.x,
                   train.bin.y,
@@ -917,6 +917,8 @@ nb.fit <- train(train.x,
                   tuneGrid = nbGrid,
                   #metric = "ROC",
                   trControl = ctrl1)
+nb.fit$bestTune
+nb.fit$finalModel
 plot(nb.fit)
 
 ```
