@@ -580,15 +580,17 @@ bst.grid <- expand.grid(n.trees = c(2000,3000,4000,5000),
 bst.fit <- train(outstate ~ . ,
                  college[indexTrain,],
                  method = "gbm",
-                 tuneGrid = gbm.grid,
-                 trControl = ctrl,
+                 tuneGrid = bst.grid,
+                 trControl = ctrl1,
                  verbose = FALSE)
 
 bst.fit$bestTune
-ggplot(gbm.fit, highlight = TRUE)
+ggplot(bst.fit, highlight = TRUE)
 
 # Variable Importance
 summary(bst.fit$finalModel, las = 2, cBars = 16, cex.names = 0.6)
+
+```
 
 ```
 
