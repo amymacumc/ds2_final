@@ -46,6 +46,13 @@ library(glmnet)
 library(pROC)
 library(mlbench)
 library(AppliedPredictiveModeling)
+library(mgcv)
+library(nlme)
+library(earth)
+library(Formula)
+library(plotmo)
+library(plotrix)
+library(TeachingDemos)
 ```
 
 # Data Import
@@ -106,16 +113,16 @@ dat <- dat1
 summary(dat)
 
 bin.dat1 <- dat1 %>% 
-  mutate(recovery_time = ifelse(recovery_time > 30, ">30", "<=30")) %>% 
-  mutate(recovery_time = factor(recovery_time, levels = c("<=30", ">30")))
+  mutate(recovery_time = ifelse(recovery_time > 30, "gt30", "lt30")) %>% 
+  mutate(recovery_time = factor(recovery_time, levels = c("lt30", "gt30")))
   
 bin.dat2 <- dat2 %>% 
-  mutate(recovery_time = ifelse(recovery_time > 30, ">30", "<=30")) %>% 
-  mutate(recovery_time = factor(recovery_time, levels = c("<=30", ">30")))
+  mutate(recovery_time = ifelse(recovery_time > 30, "gt30", "lt30")) %>% 
+  mutate(recovery_time = factor(recovery_time, levels = c("lt30", "gt30")))
 
 bin.dat3 <- dat3 %>% 
-  mutate(recovery_time = ifelse(recovery_time > 30, ">30", "<=30")) %>% 
-  mutate(recovery_time = factor(recovery_time, levels = c("<=30", ">30")))
+ mutate(recovery_time = ifelse(recovery_time > 30, "gt30", "lt30")) %>% 
+  mutate(recovery_time = factor(recovery_time, levels = c("lt30", "gt30")))
 
 bin.dat <- bin.dat1
 summary(bin.dat)
@@ -468,7 +475,7 @@ coef(mars.fit$finalModel) %>% broom::tidy() %>% knitr::kable()
 summary(mars.fit$finalModel)
 
 #vip plots
-vip(mars.fit$finalModel)
+vip(mars.fit$finalModel) + theme_bw()
 
 p1 <- pdp::partial(mars.fit, pred.var = c("bmi"), grid.resolution = 10) %>% autoplot() + theme_bw()
 p2 <- pdp::partial(mars.fit, pred.var = c("studyB"), grid.resolution = 10) %>% autoplot() + theme_bw()
@@ -756,31 +763,33 @@ dev.off()
 
 ```{r}
 ctrl2 <- trainControl(method = "cv",
+                      number = 5, 
                      summaryFunction = twoClassSummary,
                      classProbs = TRUE)
-
 ```
+
 
 ### Logistic Regression
 ```{r logistic}
 set.seed(2023)
+
 glm.fit <- train(
-  train.x, train.bin.y,
+  x = train.x, 
+  y = train.bin.y,
   method = 'glm',
   metric = 'ROC',
-  trControl = 'ctrl2'
+  trControl = ctrl2
 )
 
 coef(glm.fit$finalModel)
-vip(glm.fit$finalModel)
-
+vip(glm.fit$finalModel) + theme_bw()
 ```
 
 ### Penalized Logistic Regression
 ```{r}
 glmnGrid <- expand.grid(.alpha = seq(0, 1, length = 21),
                         .lambda = exp(seq(-8, -1, length = 50)))
-set.seed(1)
+set.seed(2023)
 glmn.fit <- train(train.x, train.bin.y,
                   method = 'glmnet',
                   tuneGrid = glmnGrid,
@@ -794,8 +803,8 @@ myPar <- list(superpose.symbol = list(col = myCol),
 superpose.line = list(col = myCol))
 plot(glmn.fit, par.settings = myPar, xTrans = function(x) log(x))
 
-coef(glmn.fit$finalModel)
-vip(glmn.fit$finalModel)
+#coef(glmn.fit$finalModel)
+vip(glmn.fit$finalModel) + theme_bw()
 ```
 
 ### Generalized Additive Model (GAM) for classification
@@ -813,7 +822,7 @@ plot(gam.bin.fit$finalModel, select = 3)
 ggplot(gam.bin.fit) +
   labs(title = "GAM CV Result") + 
   theme_bw()
-ggsave("./figure/gam_cv.jpeg", dpi = 500)
+ggsave("./figure/gam_binned_cv.jpeg", dpi = 500)
 
 gam.bin.fit$bestTune
 
@@ -829,7 +838,7 @@ par(mfrow=c(1, 1))
 ### Multivariate Adaptive Regression Splines (MARS) for classification
 
 ```{r}
-set.seed(1)
+set.seed(2023)
 mars.bin.fit <- train(train.x, train.bin.y,
                     method = "earth",
                     tuneGrid = expand.grid(degree = 1:3,
@@ -845,11 +854,25 @@ ggsave("./figure/mars_binned_cv.jpeg", dpi = 500)
 
 mars.bin.fit$bestTune
 
-coef(mars.bin.fit$finalModel)
+coef(mars.bin.fit$finalModel) %>% broom::tidy() %>% knitr::kable()
 
 summary(mars.bin.fit$finalModel)
 
-vip(mars.bin.fit$finalModel)
+vip(mars.bin.fit$finalModel) + theme_bw()
+
+#vip plots
+
+p1 <- pdp::partial(mars.bin.fit, pred.var = c("bmi"), grid.resolution = 10) %>% autoplot() + theme_bw()
+p2 <- pdp::partial(mars.bin.fit, pred.var = c("studyB"), grid.resolution = 10) %>% autoplot() + theme_bw()
+
+# interactions of bmi and the studyB
+p3 <- pdp::partial(mars.bin.fit, pred.var = c("bmi", "studyB"),
+                   grid.resolution = 10) %>%
+      pdp::plotPartial(levelplot = FALSE, zlab = "yhat", drape = TRUE,
+                       screen = list(z = 20, x = -60))
+(p4 <- grid.arrange(p1, p2, p3, ncol = 3))
+
+
 ```
 
 
