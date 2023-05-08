@@ -592,7 +592,6 @@ summary(bst.fit$finalModel, las = 2, cBars = 16, cex.names = 0.6)
 
 ```
 
-```
 
 ### Regression Trees
 
